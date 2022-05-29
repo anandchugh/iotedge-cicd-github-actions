@@ -1,0 +1,17 @@
+{
+    "name": "frontendmodule",
+    "version": "0.0.1",
+    "description": "Azure IoT Edge Node.js module",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Azure/generator-azure-iot-edge-module"
+    },
+    "license": "MIT",
+    "dependencies": {
+        "express": "^4.18.1",
+        "nyc": "^15.1.0"
+    },
+    "scripts": {
+        "test": "nyc --reporter=text --reporter=html mocha -R spec tests/unit/*.js"
+    }
+}

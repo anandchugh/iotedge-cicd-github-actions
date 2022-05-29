@@ -1,0 +1,161 @@
+{
+  "$schema-template": "4.0.0",
+  "modulesContent": {
+    "$edgeAgent": {
+      "properties.desired": {
+        "schemaVersion": "1.1",
+        "runtime": {
+          "type": "docker",
+          "settings": {
+            "minDockerVersion": "v1.25",
+            "loggingOptions": "",
+            "registryCredentials": {
+              "acr": {
+                "username": "${ACR_USERNAME}",
+                "password": "${ACR_PASSWORD}",
+                "address": "${ACR_ADDRESS}"
+              }
+            }
+          }
+        },
+        "systemModules": {
+          "edgeAgent": {
+            "type": "docker",
+            "settings": {
+              "image": "mcr.microsoft.com/azureiotedge-agent:1.2",
+              "createOptions": {}
+            }
+          },
+          "edgeHub": {
+            "type": "docker",
+            "status": "running",
+            "restartPolicy": "always",
+            "settings": {
+              "image": "mcr.microsoft.com/azureiotedge-hub:1.2",
+              "createOptions": {
+                "HostConfig": {
+                  "PortBindings": {
+                    "5671/tcp": [
+                      {
+                        "HostPort": "5671"
+                      }
+                    ],
+                    "8883/tcp": [
+                      {
+                        "HostPort": "8883"
+                      }
+                    ],
+                    "443/tcp": [
+                      {
+                        "HostPort": "443"
+                      }
+                    ],
+                    "9600/tcp": [
+                      {
+                        "HostPort": "9600"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "modules": {
+          "FrontendModule": {
+            "version": "1.0",
+            "type": "docker",
+            "status": "running",
+            "restartPolicy": "always",
+            "settings": {
+              "image": "${MODULES.FrontendModule}",
+              "createOptions": {
+                "ExposedPorts": {
+                  "3000/tcp": {}
+                },
+                "NetworkingConfig": {
+                  "EndpointsConfig": {
+                    "host": {}
+                  }
+                },
+                "HostConfig": {
+                  "NetworkMode": "host",
+                  "Privileged": false,
+                  "PortBindings": {
+                    "3000/tcp": [
+                      {
+                        "HostPort": "3000"
+                      }
+                    ]
+                  }
+                }
+              }
+            },
+            "env": {
+              "APPINSIGHTS_CONNECTION_STRING": {
+                "value": "$APPINSIGHTS_CONNECTION_STRING"
+              }
+            }
+          },
+          "BackendModule": {
+            "version": "1.0",
+            "type": "docker",
+            "status": "running",
+            "restartPolicy": "always",
+            "settings": {
+              "image": "${MODULES.BackendModule}",
+              "createOptions": {}
+            },
+            "env": {
+              "APPINSIGHTS_CONNECTION_STRING": {
+                "value": "$APPINSIGHTS_CONNECTION_STRING"
+              }
+            }
+          },
+          "IoTEdgeMetricsCollector": {
+            "settings": {
+              "image": "mcr.microsoft.com/azureiotedge-metrics-collector:1.0",
+              "createOptions": ""
+            },
+            "type": "docker",
+            "env": {
+              "ResourceId": {
+                "value": "$IOT_HUB_RESOURCE_ID"
+              },
+              "UploadTarget": {
+                "value": "AzureMonitor"
+              },
+              "LogAnalyticsWorkspaceId": {
+                "value": "$LOG_ANALYTICS_WORKSPACE_ID"
+              },
+              "LogAnalyticsSharedKey": {
+                "value": "$LOG_ANALYTICS_SHARED_KEY"
+              },
+              "MetricsEndpointsCSV": {
+                "value": "http://edgeAgent:9600/metrics,http://edgeHub:9600/metrics"
+              },
+              "OtherConfig": {
+                "value": "<See https://aka.ms/edgemon-config for details>"
+              },
+              "AzureDomain": {
+                "value": "azure.com"
+              }
+            },
+            "status": "running",
+            "restartPolicy": "always",
+            "version": "1.0"
+          }
+        }
+      }
+    },
+    "$edgeHub": {
+      "properties.desired": {
+        "schemaVersion": "1.1",
+        "routes": {},
+        "storeAndForwardConfiguration": {
+          "timeToLiveSecs": 7200
+        }
+      }
+    }
+  }
+}

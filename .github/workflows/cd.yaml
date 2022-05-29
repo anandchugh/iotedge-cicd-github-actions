@@ -1,0 +1,66 @@
+---
+name: CD
+
+on: # yamllint disable-line rule:truthy
+  workflow_dispatch:
+    inputs:
+      runNumber:
+        description: "CI Build Run Number"
+        required: true
+      deploymentTag:
+        description: "Deployment Tag"
+        required: true
+
+env:
+  DEPLOYMENT_TAG: ${{ github.event.inputs.deploymentTag }}
+  RUN_NUMBER: ${{ github.event.inputs.runNumber }}
+
+jobs:
+  Deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Read variables from env file
+        run: |
+          cp ./EdgeSolution/.env_template ./EdgeSolution/.env
+          cat ./EdgeSolution/.env
+          sed -i 's/^#.*//' ./EdgeSolution/.env
+          sed -i '/^$/d' ./EdgeSolution/.env
+          sed -i 's%^ACR_USERNAME=.*%ACR_USERNAME=${{ secrets.ACR_USERNAME }}%' ./EdgeSolution/.env
+          sed -i 's%^ACR_PASSWORD=.*%ACR_PASSWORD=${{ secrets.ACR_PASSWORD }}%' ./EdgeSolution/.env
+          sed -i 's%^ACR_ADDRESS=.*%ACR_ADDRESS=${{ secrets.ACR_LOGIN_SERVER }}%' ./EdgeSolution/.env
+          sed -i 's%^LOG_ANALYTICS_WORKSPACE_ID=.*%LOG_ANALYTICS_WORKSPACE_ID=${{ secrets.LOG_ANALYTICS_WORKSPACE_ID}}%' ./EdgeSolution/.env
+          sed -i 's%^LOG_ANALYTICS_SHARED_KEY=.*%LOG_ANALYTICS_SHARED_KEY=${{ secrets.LOG_ANALYTICS_SHARED_KEY}}%' ./EdgeSolution/.env
+          sed -i 's%^APPINSIGHTS_CONNECTION_STRING=.*%APPINSIGHTS_CONNECTION_STRING=${{ secrets.APPINSIGHTS_CONNECTION_STRING}}%' ./EdgeSolution/.env
+          sed -i 's%^IOT_HUB_RESOURCE_ID=.*%IOT_HUB_RESOURCE_ID=${{ secrets.IOT_HUB_RESOURCE_ID }}%' ./EdgeSolution/.env
+          cat ./EdgeSolution/.env
+
+      # install iotedgedev
+      - name: install iotedgedev
+        run: |
+          make install_iotedgedev
+          make install_azure_iot
+
+      # Changing the docker image version based on the current build number
+      - name: Change docker image versions
+        run: |
+          cd ${GITHUB_WORKSPACE}/EdgeSolution/modules/FrontendModule
+          cat module.json | jq '.image.tag.version =  $v' --arg v '1.0.${{env.RUN_NUMBER}}' | sponge module.json
+          cd ${GITHUB_WORKSPACE}/EdgeSolution/modules/BackendModule
+          cat module.json | jq '.image.tag.version =  $v' --arg v '1.0.${{env.RUN_NUMBER}}' | sponge module.json
+
+      # generating iotedge config file
+      - name: generate deployment config json
+        run: |
+          cd ./EdgeSolution
+          cat .env
+          iotedgedev genconfig -f ./deployment.template.json -P amd64
+
+      # Creating the deployment of the modules using the config file generated in the above step
+      - name: Create modules deployment
+        env:
+          IOTHUB_CONN_STRING: ${{ secrets.IOTHUB_CONN_STRING}}
+        run: |
+          cd ./EdgeSolution/config
+          az iot edge deployment create -d "${{ github.run_number }}" -l "${{env.IOTHUB_CONN_STRING}}" -k deployment.amd64.json -t "tags.environment='${{env.DEPLOYMENT_TAG}}'"
