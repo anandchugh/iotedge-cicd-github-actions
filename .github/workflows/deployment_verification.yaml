@@ -1,0 +1,122 @@
+---
+name: Deployment Verification
+
+on: # yamllint disable-line rule:truthy
+  workflow_dispatch:
+    inputs:
+      runNumber:
+        description: "CI Build Run Number"
+        required: true
+
+env:
+  IOTHUB_NAME: ${{ secrets.IOTHUB_NAME }}
+  DEVICE_ID: e2e-verification-device
+  DEPLOYMENT_TAG: e2e-verification
+  RUN_NUMBER: ${{ github.event.inputs.runNumber }}
+  SHA5: ${GITHUB_SHA::5}
+
+jobs:
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Read variables from env file
+        run: |
+          cp ./EdgeSolution/.env_template ./EdgeSolution/.env
+          cat ./EdgeSolution/.env
+          sed -i 's/^#.*//' ./EdgeSolution/.env
+          sed -i '/^$/d' ./EdgeSolution/.env
+          sed -i 's%^ACR_USERNAME=.*%ACR_USERNAME=${{ secrets.ACR_USERNAME }}%' ./EdgeSolution/.env
+          sed -i 's%^ACR_PASSWORD=.*%ACR_PASSWORD=${{ secrets.ACR_PASSWORD }}%' ./EdgeSolution/.env
+          sed -i 's%^ACR_ADDRESS=.*%ACR_ADDRESS=${{ secrets.ACR_LOGIN_SERVER }}%' ./EdgeSolution/.env
+          sed -i 's%^LOG_ANALYTICS_WORKSPACE_ID=.*%LOG_ANALYTICS_WORKSPACE_ID=${{ secrets.LOG_ANALYTICS_WORKSPACE_ID}}%' ./EdgeSolution/.env
+          sed -i 's%^LOG_ANALYTICS_SHARED_KEY=.*%LOG_ANALYTICS_SHARED_KEY=${{ secrets.LOG_ANALYTICS_SHARED_KEY}}%' ./EdgeSolution/.env
+          sed -i 's%^APPINSIGHTS_CONNECTION_STRING=.*%APPINSIGHTS_CONNECTION_STRING=${{ secrets.APPINSIGHTS_CONNECTION_STRING}}%' ./EdgeSolution/.env
+          sed -i 's%^IOT_HUB_RESOURCE_ID=.*%IOT_HUB_RESOURCE_ID=${{ secrets.IOT_HUB_RESOURCE_ID }}%' ./EdgeSolution/.env
+          cat ./EdgeSolution/.env
+
+      # install iotedgedev
+      - name: install iotedgedev
+        run: |
+          make install_iotedgedev
+          make install_azure_iot
+
+      # Changing the docker image version based on the current build number
+      - name: Change docker image versions
+        run: |
+          cd ${GITHUB_WORKSPACE}/EdgeSolution/modules/FrontendModule
+          cat module.json | jq '.image.tag.version =  $v' --arg v '1.0.${{env.RUN_NUMBER}}' | sponge module.json
+          cd ${GITHUB_WORKSPACE}/EdgeSolution/modules/BackendModule
+          cat module.json | jq '.image.tag.version =  $v' --arg v '1.0.${{env.RUN_NUMBER}}' | sponge module.json
+
+      # generating iotedge config file
+      - name: generate deployment config json
+        run: |
+          cd ./EdgeSolution
+          cat .env
+          iotedgedev genconfig -f ./deployment.template.json -P amd64
+
+      # Creating the deployment of the modules using the config file generated in the above step
+      - name: Create modules deployment
+        env:
+          IOTHUB_CONN_STRING: ${{ secrets.IOTHUB_CONN_STRING}}
+        run: |
+          cd ./EdgeSolution/config
+          az iot edge deployment create -d "${{ env.SHA5 }}-${{ github.run_number }}" -l "${{env.IOTHUB_CONN_STRING}}" -k deployment.amd64.json -t "tags.environment='${{env.DEPLOYMENT_TAG}}'"
+
+  verification:
+    #needs: Deployment
+    runs-on: ubuntu-latest
+    steps:
+      # Install az-cli
+      - name: Install AZ CLI
+        run: |
+          curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      
+      # Log into Azure
+      - name: Az login
+        run: az login --service-principal -u ${{ secrets.AZ_CLIENT_ID }} -p ${{ secrets.AZ_CLIENT_ID_PASSWORD }} --tenant ${{ secrets.AZ_TENANT_ID }}
+
+      # Enabling configuration to install extension without any prompt
+      - name: extension-noprompt
+        run: az config set extension.use_dynamic_install=yes_without_prompt
+
+      # Verifying the image version number
+      - name: Verifying the image version
+        uses: nick-fields/retry@v2
+        with:
+          timeout_minutes: 60
+          max_attempts: 3
+          shell: bash
+          command: |
+            sleep 300
+            TARGET_IMAGE_PATH_FRONTEND=${{ secrets.ACR_LOGIN_SERVER }}/frontendmodule:1.0.${{ env.RUN_NUMBER }}-amd64
+            TARGET_IMAGE_PATH_BACKEND=${{ secrets.ACR_LOGIN_SERVER }}/backendmodule:1.0.${{ env.RUN_NUMBER }}-amd64
+            DEPLOYED_IMAGE_PATH_FRONTEND=$(az iot hub module-twin show -n ${{env.IOTHUB_NAME}} -d ${{env.DEVICE_ID}} -m '$edgeAgent' --query 'properties.reported.modules.FrontendModule.settings.image' -o tsv)
+            DEPLOYED_IMAGE_PATH_BACKEND=$(az iot hub module-twin show -n ${{env.IOTHUB_NAME}} -d ${{env.DEVICE_ID}} -m '$edgeAgent' --query 'properties.reported.modules.BackendModule.settings.image' -o tsv)
+            echo "target-image-frontend=$TARGET_IMAGE_PATH_FRONTEND"
+            echo "deployed-image-frontend=$DEPLOYED_IMAGE_PATH_FRONTEND"
+            echo "target-image-backend=$TARGET_IMAGE_PATH_BACKEND"
+            echo "deployed-image-backend=$DEPLOYED_IMAGE_PATH_BACKEND"
+            if [[ $TARGET_IMAGE_PATH_FRONTEND != $DEPLOYED_IMAGE_PATH_FRONTEND || $TARGET_IMAGE_PATH_BACKEND != $DEPLOYED_IMAGE_PATH_BACKEND ]] ; then
+            echo "The desired image of one or more modules has not been deployed yet"
+            exit 1
+            fi
+
+      # Verifying the runtime status of each module and checking for failure
+      - name: Verifying the Runtime Status
+        uses: nick-fields/retry@v2
+        with:
+          timeout_minutes: 5
+          max_attempts: 2
+          shell: bash
+          command: |
+            az iot hub module-twin show -n ${{env.IOTHUB_NAME}} -d ${{env.DEVICE_ID}} -m '$edgeAgent' --query 'properties.reported.modules.* | [*].{Image:settings.image, Version:version, Runtime_Status:runtimeStatus,Status: status}' -o table
+            RUNTIME_STATUS_FRONTEND=$(az iot hub module-twin show -n ${{env.IOTHUB_NAME}} -d ${{env.DEVICE_ID}} -m '$edgeAgent' --query 'properties.reported.modules.FrontendModule.runtimeStatus' -o tsv )
+            RUNTIME_STATUS_BACKEND=$(az iot hub module-twin show -n ${{env.IOTHUB_NAME}} -d ${{env.DEVICE_ID}} -m '$edgeAgent' --query 'properties.reported.modules.BackendModule.runtimeStatus' -o tsv)
+            if [[ $RUNTIME_STATUS_FRONTEND != 'running' || $RUNTIME_STATUS_BACKEND != running ]] ; then
+            echo "One or more modules are not running"
+            sleep 30
+            exit 1
+            fi
