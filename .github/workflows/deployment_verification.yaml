@@ -66,7 +66,7 @@ jobs:
           az iot edge deployment create -d "${{ env.SHA5 }}-${{ github.run_number }}" -l "${{env.IOTHUB_CONN_STRING}}" -k deployment.amd64.json -t "tags.environment='${{env.DEPLOYMENT_TAG}}'"
 
   verification:
-    # needs: Deployment
+    needs: Deployment
     runs-on: ubuntu-latest
     steps:
       # Install az-cli
