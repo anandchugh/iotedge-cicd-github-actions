@@ -66,14 +66,14 @@ jobs:
           az iot edge deployment create -d "${{ env.SHA5 }}-${{ github.run_number }}" -l "${{env.IOTHUB_CONN_STRING}}" -k deployment.amd64.json -t "tags.environment='${{env.DEPLOYMENT_TAG}}'"
 
   verification:
-    #needs: Deployment
+    # needs: Deployment
     runs-on: ubuntu-latest
     steps:
       # Install az-cli
       - name: Install AZ CLI
         run: |
           curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-      
+
       # Log into Azure
       - name: Az login
         run: az login --service-principal -u ${{ secrets.AZ_CLIENT_ID }} -p ${{ secrets.AZ_CLIENT_ID_PASSWORD }} --tenant ${{ secrets.AZ_TENANT_ID }}
